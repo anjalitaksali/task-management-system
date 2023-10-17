@@ -44,7 +44,7 @@ func main() {
 }
 
 func initDB() {
-	connStr := "host=host.docker.internal user=postgres dbname=postgres password=postgres sslmode=disable"
+	connStr := "host=db user=postgres dbname=postgres password=postgres sslmode=disable"
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
