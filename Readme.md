@@ -6,8 +6,8 @@
 
 ## Starting the server
 ```
-docker build -t task-manager .
-docker run -p 8080:8080 task-manager
+docker-compose build
+docker-compose up
 ```
 
 ## Testing the endpoints
