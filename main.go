@@ -1,16 +1,17 @@
 package main
 
 import (
-	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	_ "github.com/lib/pq"
+	"github.com/go-pg/pg/v10"
+	"github.com/go-pg/pg/v10/orm"
 )
 
-var db *sql.DB
+var db *pg.DB
 
 type Task struct {
 	ID          int       `json:"id"`
@@ -20,7 +21,17 @@ type Task struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-const apiKey = "secretkey"
+const (
+	apiKey          = "secretkey"
+	dbHost          = "db"
+	dbPort          = "5432"
+	dbUser          = "postgres"
+	dbPassword      = "postgres"
+	dbName          = "postgres"
+	processingDelay = 1 * time.Minute
+)
+
+var taskChannel = make(chan Task)
 
 func main() {
 	// Initialize the database
@@ -37,32 +48,24 @@ func main() {
 	r.GET("/tasks/:id/status", getTaskStatus)
 
 	// Start the background task processing goroutine
-	go processTasks()
+	go startTaskProcessor()
 
 	// Run the server
 	r.Run(":8080")
 }
 
 func initDB() {
-	connStr := "host=db user=postgres dbname=postgres password=postgres sslmode=disable"
-	var err error
-	db, err = sql.Open("postgres", connStr)
-	if err != nil {
-		log.Fatal(err)
-	}
+	db = pg.Connect(&pg.Options{
+		Addr:     fmt.Sprintf("%s:%s", dbHost, dbPort),
+		User:     dbUser,
+		Password: dbPassword,
+		Database: dbName,
+	})
 
 	// Create tasks table if it doesn't exist
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS tasks (
-			id SERIAL PRIMARY KEY,
-			title TEXT,
-			description TEXT,
-			status TEXT,
-			created_at TIMESTAMPTZ
-		)
-	`)
+	err := db.Model(&Task{}).CreateTable(&orm.CreateTableOptions{IfNotExists: true})
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error creating database table: %v", err)
 	}
 }
 
@@ -77,59 +80,55 @@ func createTask(c *gin.Context) {
 	task.CreatedAt = time.Now()
 
 	// Insert the task into the database
-	_, err := db.Exec("INSERT INTO tasks (title, description, status, created_at) VALUES ($1, $2, $3, $4)",
-		task.Title, task.Description, task.Status, task.CreatedAt)
+	_, err := db.Model(&task).Insert()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
 		return
 	}
+
+	// Send the task to the processing channel
+	taskChannel <- task
 
 	c.JSON(http.StatusCreated, task)
 }
 
 func getTasks(c *gin.Context) {
 	var tasks []Task
-	rows, err := db.Query("SELECT * FROM tasks")
+	err := db.Model(&tasks).Select()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch tasks"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve tasks"})
 		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var task Task
-		err := rows.Scan(&task.ID, &task.Title, &task.Description, &task.Status, &task.CreatedAt)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		tasks = append(tasks, task)
 	}
 
 	c.JSON(http.StatusOK, tasks)
 }
 
 func getTaskStatus(c *gin.Context) {
-	id := c.Param("id")
-	var status string
-	err := db.QueryRow("SELECT status FROM tasks WHERE id = $1", id).Scan(&status)
+	taskID := c.Param("id")
+	var task Task
+	err := db.Model(&task).Where("id = ?", taskID).Select()
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": status})
+	c.JSON(http.StatusOK, task)
 }
 
-func processTasks() {
-	for {
-		// Simulate task processing delay (5 minutes)
-		time.Sleep(5 * time.Minute)
-		log.Println("checking for incomplete tasks")
-		_, err := db.Exec("UPDATE tasks SET status = 'completed' WHERE status = 'incomplete' AND created_at <= $1", time.Now().Add(-5*time.Minute))
-		if err != nil {
-			log.Println("Failed to update task status to completed")
-		}
+func processTask(task Task) {
+	// Simulate task processing delay (5 minutes)
+	time.Sleep(processingDelay)
+	task.Status = "completed"
+	_, err := db.Model(&task).WherePK().Update()
+	if err != nil {
+		log.Println("Failed to update task status to completed")
+	}
+	log.Printf("Task %d marked as completed", task.ID)
+}
+
+func startTaskProcessor() {
+	for task := range taskChannel {
+		go processTask(task)
 	}
 }
 
