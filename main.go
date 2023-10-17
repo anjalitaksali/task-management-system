@@ -28,7 +28,7 @@ const (
 	dbUser          = "postgres"
 	dbPassword      = "postgres"
 	dbName          = "postgres"
-	processingDelay = 1 * time.Minute
+	processingDelay = 5 * time.Minute
 )
 
 var taskChannel = make(chan Task)
